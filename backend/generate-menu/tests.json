@@ -1,0 +1,24 @@
+{
+  "tests": [
+    {
+      "name": "Generate menu with preferences",
+      "method": "POST",
+      "body": {
+        "preferences": {
+          "diet": ["vegetarian"],
+          "allergens": ["Орехи"],
+          "excludedFoods": ["грибы"],
+          "budget": 5000,
+          "cookingTime": "30-60",
+          "servings": 2,
+          "mealsPerDay": 3
+        }
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "menu": "array"
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}

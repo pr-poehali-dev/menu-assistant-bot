@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import Icon from '@/components/ui/icon';
+import { useToast } from '@/hooks/use-toast';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
@@ -59,19 +60,53 @@ const SAMPLE_MEALS: Record<string, Meal[]> = {
 const DAYS = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
 
 const WeeklyMenu = ({ preferences, onNavigateToShopping }: WeeklyMenuProps) => {
-  const [weekMenu, setWeekMenu] = useState<DayMenu[]>(() =>
-    DAYS.map((day, index) => ({
-      day,
-      meals: {
-        breakfast: SAMPLE_MEALS.breakfast[index % 3],
-        lunch: SAMPLE_MEALS.lunch[index % 3],
-        dinner: SAMPLE_MEALS.dinner[index % 3],
-      },
-    }))
-  );
-
+  const { toast } = useToast();
+  const [weekMenu, setWeekMenu] = useState<DayMenu[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [selectedDay, setSelectedDay] = useState(0);
   const [editingMeal, setEditingMeal] = useState<{ day: number; mealType: keyof DayMenu['meals'] } | null>(null);
+
+  useEffect(() => {
+    generateMenu();
+  }, []);
+
+  const generateMenu = async () => {
+    setIsLoading(true);
+    try {
+      const response = await fetch('https://functions.poehali.dev/629210d8-597e-4851-8984-c9267cbae6d9', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ preferences })
+      });
+      
+      if (!response.ok) throw new Error('Ошибка генерации меню');
+      
+      const data = await response.json();
+      setWeekMenu(data.menu);
+      toast({
+        title: 'Меню готово!',
+        description: 'Персональное меню создано с учётом всех ваших предпочтений',
+      });
+    } catch (error) {
+      toast({
+        title: 'Ошибка',
+        description: 'Не удалось сгенерировать меню. Попробуйте ещё раз.',
+        variant: 'destructive',
+      });
+      setWeekMenu(
+        DAYS.map((day, index) => ({
+          day,
+          meals: {
+            breakfast: SAMPLE_MEALS.breakfast[index % 3],
+            lunch: SAMPLE_MEALS.lunch[index % 3],
+            dinner: SAMPLE_MEALS.dinner[index % 3],
+          },
+        }))
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleMealChange = (mealType: keyof DayMenu['meals'], meal: Meal) => {
     if (editingMeal) {
@@ -84,17 +119,27 @@ const WeeklyMenu = ({ preferences, onNavigateToShopping }: WeeklyMenuProps) => {
     }
   };
 
-  const totalWeeklyCost = weekMenu.reduce(
+  const totalWeeklyCost = weekMenu.length > 0 ? weekMenu.reduce(
     (sum, day) => sum + day.meals.breakfast.cost + day.meals.lunch.cost + day.meals.dinner.cost,
     0
-  );
+  ) : 0;
 
-  const averageDailyCalories = Math.round(
+  const averageDailyCalories = weekMenu.length > 0 ? Math.round(
     weekMenu.reduce(
       (sum, day) => sum + day.meals.breakfast.calories + day.meals.lunch.calories + day.meals.dinner.calories,
       0
     ) / 7
-  );
+  ) : 0;
+
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
+        <Icon name="Loader2" size={48} className="text-primary animate-spin" />
+        <h3 className="text-xl font-medium">Генерирую персональное меню...</h3>
+        <p className="text-muted-foreground">Учитываю ваши предпочтения и исключения</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -106,10 +151,16 @@ const WeeklyMenu = ({ preferences, onNavigateToShopping }: WeeklyMenuProps) => {
           </h2>
           <p className="text-muted-foreground mt-1">Ваш персональный план питания</p>
         </div>
-        <Button onClick={onNavigateToShopping} size="lg" className="gap-2">
-          <Icon name="ShoppingCart" size={20} />
-          Список покупок
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={generateMenu} variant="outline" size="lg" className="gap-2">
+            <Icon name="RefreshCw" size={20} />
+            Пересоздать
+          </Button>
+          <Button onClick={onNavigateToShopping} size="lg" className="gap-2">
+            <Icon name="ShoppingCart" size={20} />
+            Список покупок
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

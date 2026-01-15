@@ -4,13 +4,66 @@ Telegram бот для планирования недельного меню с
 import json
 import os
 import requests
+import psycopg2
 from typing import Dict, Any, Optional
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
-# Хранилище состояний пользователей (в продакшене использовать БД)
-user_states: Dict[int, Dict[str, Any]] = {}
+def get_db_connection():
+    """Подключение к базе данных"""
+    return psycopg2.connect(DATABASE_URL)
+
+def get_user_state(chat_id: int) -> Optional[Dict[str, Any]]:
+    """Получить состояние пользователя из БД"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT step, preferences, menu FROM user_states WHERE chat_id = %s",
+            (chat_id,)
+        )
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if row:
+            return {
+                'step': row[0],
+                'preferences': row[1],
+                'menu': row[2]
+            }
+        return None
+    except Exception as e:
+        print(f"Error getting user state: {e}")
+        return None
+
+def save_user_state(chat_id: int, state: Dict[str, Any]):
+    """Сохранить состояние пользователя в БД"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO user_states (chat_id, step, preferences, menu, updated_at)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (chat_id) 
+            DO UPDATE SET 
+                step = EXCLUDED.step,
+                preferences = EXCLUDED.preferences,
+                menu = EXCLUDED.menu,
+                updated_at = CURRENT_TIMESTAMP
+        """, (
+            chat_id,
+            state.get('step', 'diet'),
+            json.dumps(state.get('preferences', {})),
+            json.dumps(state.get('menu')) if state.get('menu') else None
+        ))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error saving user state: {e}")
 
 def send_message(chat_id: int, text: str, reply_markup: Optional[Dict] = None) -> Dict:
     """Отправка сообщения в Telegram"""
@@ -31,13 +84,17 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
     if not OPENAI_API_KEY:
         return {"error": "OpenAI API key not configured"}
     
+    diet_text = ', '.join(preferences.get('diet', ['обычная'])) if preferences.get('diet') else 'обычная'
+    allergens_text = ', '.join(preferences.get('allergens', [])) if preferences.get('allergens') else 'нет'
+    excluded_text = ', '.join(preferences.get('excludedFoods', [])) if preferences.get('excludedFoods') else 'нет'
+    
     prompt = f"""Создай недельное меню на 7 дней с завтраком, обедом и ужином.
 
 Требования:
 - Бюджет: {preferences.get('budget', 5000)} руб/неделя
-- Диета: {', '.join(preferences.get('diet', ['обычная']))}
-- Исключить аллергены: {', '.join(preferences.get('allergens', ['нет']))}
-- Не использовать продукты: {', '.join(preferences.get('excludedFoods', ['нет']))}
+- Диета: {diet_text}
+- Исключить аллергены: {allergens_text}
+- Не использовать продукты: {excluded_text}
 - Порций: {preferences.get('servings', 2)}
 - Время готовки: до {preferences.get('cookingTime', '60')} минут
 
@@ -69,8 +126,11 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
                 'messages': [{'role': 'user', 'content': prompt}],
                 'temperature': 0.7
             },
-            timeout=30
+            timeout=60
         )
+        
+        if response.status_code != 200:
+            return {"error": f"OpenAI API error: {response.status_code}"}
         
         result = response.json()
         content = result['choices'][0]['message']['content']
@@ -115,7 +175,7 @@ def format_menu_message(menu_data: Dict) -> str:
 
 def handle_start(chat_id: int):
     """Обработка команды /start"""
-    user_states[chat_id] = {
+    state = {
         'step': 'diet',
         'preferences': {
             'diet': [],
@@ -126,6 +186,7 @@ def handle_start(chat_id: int):
             'servings': 2
         }
     }
+    save_user_state(chat_id, state)
     
     keyboard = {
         "inline_keyboard": [
@@ -145,17 +206,19 @@ def handle_start(chat_id: int):
 
 def handle_callback(chat_id: int, callback_data: str):
     """Обработка нажатий на кнопки"""
-    if chat_id not in user_states:
+    state = get_user_state(chat_id)
+    if not state:
         handle_start(chat_id)
         return
     
-    state = user_states[chat_id]
     preferences = state['preferences']
     
     # Обработка выбора диеты
     if callback_data.startswith('diet_'):
         if callback_data == 'diet_done':
             state['step'] = 'allergens'
+            save_user_state(chat_id, state)
+            
             keyboard = {
                 "inline_keyboard": [
                     [{"text": "🥛 Молочные", "callback_data": "allergen_dairy"}, {"text": "🥚 Яйца", "callback_data": "allergen_eggs"}],
@@ -174,12 +237,16 @@ def handle_callback(chat_id: int, callback_data: str):
             diet_type = callback_data.replace('diet_', '')
             if diet_type not in preferences['diet']:
                 preferences['diet'].append(diet_type)
+                state['preferences'] = preferences
+                save_user_state(chat_id, state)
                 send_message(chat_id, f"✅ Добавлено: {diet_type}")
     
     # Обработка аллергенов
     elif callback_data.startswith('allergen_'):
         if callback_data == 'allergen_done':
             state['step'] = 'budget'
+            save_user_state(chat_id, state)
+            
             keyboard = {
                 "inline_keyboard": [
                     [{"text": "💰 3000 ₽", "callback_data": "budget_3000"}, {"text": "💰 5000 ₽", "callback_data": "budget_5000"}],
@@ -196,14 +263,18 @@ def handle_callback(chat_id: int, callback_data: str):
             allergen = callback_data.replace('allergen_', '')
             if allergen not in preferences['allergens']:
                 preferences['allergens'].append(allergen)
+                state['preferences'] = preferences
+                save_user_state(chat_id, state)
                 send_message(chat_id, f"✅ Исключено: {allergen}")
     
     # Обработка бюджета
     elif callback_data.startswith('budget_'):
         budget = int(callback_data.replace('budget_', ''))
         preferences['budget'] = budget
-        
+        state['preferences'] = preferences
         state['step'] = 'servings'
+        save_user_state(chat_id, state)
+        
         keyboard = {
             "inline_keyboard": [
                 [{"text": "👤 1 человек", "callback_data": "servings_1"}, {"text": "👥 2 человека", "callback_data": "servings_2"}],
@@ -221,6 +292,8 @@ def handle_callback(chat_id: int, callback_data: str):
     elif callback_data.startswith('servings_'):
         servings = int(callback_data.replace('servings_', ''))
         preferences['servings'] = servings
+        state['preferences'] = preferences
+        save_user_state(chat_id, state)
         
         send_message(chat_id, "⏳ Генерирую персональное меню... Это займёт ~30 секунд")
         
@@ -237,6 +310,7 @@ def handle_callback(chat_id: int, callback_data: str):
         
         # Сохраняем меню для списка покупок
         state['menu'] = menu_data.get('menu', [])
+        save_user_state(chat_id, state)
     
     # Пересоздание меню
     elif callback_data == 'regenerate':
@@ -252,6 +326,7 @@ def handle_callback(chat_id: int, callback_data: str):
         }
         send_message(chat_id, menu_message, keyboard)
         state['menu'] = menu_data.get('menu', [])
+        save_user_state(chat_id, state)
     
     # Список покупок
     elif callback_data == 'shopping_list':
@@ -307,8 +382,9 @@ def handler(event: dict, context) -> dict:
             if text == '/start':
                 handle_start(chat_id)
             elif text == '/menu':
-                if chat_id in user_states and user_states[chat_id].get('menu'):
-                    menu_message = format_menu_message({'menu': user_states[chat_id]['menu']})
+                state = get_user_state(chat_id)
+                if state and state.get('menu'):
+                    menu_message = format_menu_message({'menu': state['menu']})
                     send_message(chat_id, menu_message)
                 else:
                     send_message(chat_id, "❌ Сначала создайте меню командой /start")
@@ -326,6 +402,7 @@ def handler(event: dict, context) -> dict:
         }
     
     except Exception as e:
+        print(f"Error in handler: {str(e)}")
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json'},

@@ -129,10 +129,8 @@ def handle_start(chat_id: int):
     
     keyboard = {
         "inline_keyboard": [
-            [{"text": "🥗 Обычное", "callback_data": "diet_none"}],
-            [{"text": "🌱 Вегетарианское", "callback_data": "diet_vegetarian"}],
-            [{"text": "🥑 Веганское", "callback_data": "diet_vegan"}],
-            [{"text": "🥩 Кето", "callback_data": "diet_keto"}],
+            [{"text": "🥗 Обычное", "callback_data": "diet_none"}, {"text": "🌱 Вегетарианское", "callback_data": "diet_vegetarian"}],
+            [{"text": "🥑 Веганское", "callback_data": "diet_vegan"}, {"text": "🥩 Кето", "callback_data": "diet_keto"}],
             [{"text": "✅ Готово", "callback_data": "diet_done"}]
         ]
     }
@@ -160,10 +158,9 @@ def handle_callback(chat_id: int, callback_data: str):
             state['step'] = 'allergens'
             keyboard = {
                 "inline_keyboard": [
-                    [{"text": "🥛 Молочные продукты", "callback_data": "allergen_dairy"}],
-                    [{"text": "🥚 Яйца", "callback_data": "allergen_eggs"}],
-                    [{"text": "🥜 Орехи", "callback_data": "allergen_nuts"}],
-                    [{"text": "🌾 Глютен", "callback_data": "allergen_gluten"}],
+                    [{"text": "🥛 Молочные", "callback_data": "allergen_dairy"}, {"text": "🥚 Яйца", "callback_data": "allergen_eggs"}],
+                    [{"text": "🥜 Орехи", "callback_data": "allergen_nuts"}, {"text": "🌾 Глютен", "callback_data": "allergen_gluten"}],
+                    [{"text": "🦐 Морепродукты", "callback_data": "allergen_seafood"}, {"text": "🍋 Цитрусовые", "callback_data": "allergen_citrus"}],
                     [{"text": "✅ Готово", "callback_data": "allergen_done"}]
                 ]
             }
@@ -185,10 +182,8 @@ def handle_callback(chat_id: int, callback_data: str):
             state['step'] = 'budget'
             keyboard = {
                 "inline_keyboard": [
-                    [{"text": "💰 3000 ₽", "callback_data": "budget_3000"}],
-                    [{"text": "💰 5000 ₽", "callback_data": "budget_5000"}],
-                    [{"text": "💰 7000 ₽", "callback_data": "budget_7000"}],
-                    [{"text": "💰 10000 ₽", "callback_data": "budget_10000"}]
+                    [{"text": "💰 3000 ₽", "callback_data": "budget_3000"}, {"text": "💰 5000 ₽", "callback_data": "budget_5000"}],
+                    [{"text": "💰 7000 ₽", "callback_data": "budget_7000"}, {"text": "💰 10000 ₽", "callback_data": "budget_10000"}]
                 ]
             }
             send_message(
@@ -211,10 +206,8 @@ def handle_callback(chat_id: int, callback_data: str):
         state['step'] = 'servings'
         keyboard = {
             "inline_keyboard": [
-                [{"text": "👤 1 человек", "callback_data": "servings_1"}],
-                [{"text": "👥 2 человека", "callback_data": "servings_2"}],
-                [{"text": "👨‍👩‍👦 3 человека", "callback_data": "servings_3"}],
-                [{"text": "👨‍👩‍👧‍👦 4+ человека", "callback_data": "servings_4"}]
+                [{"text": "👤 1 человек", "callback_data": "servings_1"}, {"text": "👥 2 человека", "callback_data": "servings_2"}],
+                [{"text": "👨‍👩‍👦 3 человека", "callback_data": "servings_3"}, {"text": "👨‍👩‍👧‍👦 4+ человека", "callback_data": "servings_4"}]
             ]
         }
         send_message(

@@ -78,11 +78,43 @@ def send_message(chat_id: int, text: str, reply_markup: Optional[Dict] = None) -
     response = requests.post(url, json=payload)
     return response.json()
 
+def fetch_meals_by_category(category: str, limit: int = 30) -> list:
+    """Получение рецептов по категории из TheMealDB"""
+    try:
+        response = requests.get(
+            f'https://www.themealdb.com/api/json/v1/1/filter.php?c={category}',
+            timeout=10
+        )
+        if response.status_code == 200:
+            data = response.json()
+            meals = data.get('meals', [])
+            # Получаем детали для каждого блюда
+            detailed_meals = []
+            for meal in meals[:limit]:
+                detail_response = requests.get(
+                    f'https://www.themealdb.com/api/json/v1/1/lookup.php?i={meal["idMeal"]}',
+                    timeout=5
+                )
+                if detail_response.status_code == 200:
+                    detail_data = detail_response.json()
+                    if detail_data.get('meals'):
+                        m = detail_data['meals'][0]
+                        detailed_meals.append({
+                            'name': m['strMeal'],
+                            'category': m['strCategory'],
+                            'area': m['strArea'],
+                            'instructions': m['strInstructions'],
+                            'ingredients': [m.get(f'strIngredient{i}', '') for i in range(1, 21) if m.get(f'strIngredient{i}')]
+                        })
+            return detailed_meals
+    except Exception as e:
+        print(f"Error fetching category meals: {e}")
+    return []
+
 def fetch_random_meals_from_db(count: int = 21) -> list:
     """Получение случайных рецептов из TheMealDB (полностью бесплатно!)"""
     meals = []
     try:
-        # TheMealDB предоставляет бесплатный API без ключа
         for _ in range(count):
             response = requests.get(
                 'https://www.themealdb.com/api/json/v1/1/random.php',
@@ -96,7 +128,8 @@ def fetch_random_meals_from_db(count: int = 21) -> list:
                         'name': meal['strMeal'],
                         'category': meal['strCategory'],
                         'area': meal['strArea'],
-                        'instructions': meal['strInstructions']
+                        'instructions': meal['strInstructions'],
+                        'ingredients': [meal.get(f'strIngredient{i}', '') for i in range(1, 21) if meal.get(f'strIngredient{i}')]
                     })
     except Exception as e:
         print(f"Error fetching meals: {e}")
@@ -104,31 +137,84 @@ def fetch_random_meals_from_db(count: int = 21) -> list:
     return meals
 
 def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
-    """Генерация меню из базы TheMealDB (полностью бесплатно, без API ключа)"""
+    """Генерация меню из базы TheMealDB с умной фильтрацией по диете"""
     
-    # Получаем 21 случайных блюд (7 дней × 3 приёма пищи)
-    all_meals = fetch_random_meals_from_db(21)
+    diet_types = preferences.get('diet', [])
+    allergens = preferences.get('allergens', [])
+    excluded = preferences.get('excludedFoods', [])
+    budget_per_meal = preferences.get('budget', 5000) / 21
+    
+    # Маппинг типов диет на категории TheMealDB
+    diet_to_categories = {
+        'vegetarian': ['Vegetarian'],
+        'vegan': ['Vegan'],
+        'none': ['Beef', 'Chicken', 'Pork', 'Seafood', 'Lamb', 'Pasta', 'Miscellaneous'],
+        'keto': ['Beef', 'Chicken', 'Pork', 'Seafood', 'Lamb'],
+        'paleo': ['Beef', 'Chicken', 'Pork', 'Seafood', 'Lamb'],
+        'lowcarb': ['Beef', 'Chicken', 'Pork', 'Seafood', 'Lamb']
+    }
+    
+    # Определяем категории для поиска на основе диеты
+    target_categories = []
+    if diet_types:
+        for diet in diet_types:
+            target_categories.extend(diet_to_categories.get(diet, []))
+    else:
+        target_categories = ['Beef', 'Chicken', 'Pork', 'Seafood', 'Vegetarian', 'Pasta', 'Dessert']
+    
+    # Убираем дубликаты
+    target_categories = list(set(target_categories))
+    
+    # Получаем блюда из нужных категорий
+    all_meals = []
+    for category in target_categories:
+        category_meals = fetch_meals_by_category(category, limit=10)
+        all_meals.extend(category_meals)
+    
+    # Если недостаточно блюд, добавляем случайные
+    if len(all_meals) < 30:
+        random_meals = fetch_random_meals_from_db(30 - len(all_meals))
+        all_meals.extend(random_meals)
     
     if len(all_meals) < 21:
         return {"error": "Не удалось загрузить достаточно рецептов из базы"}
     
-    # Фильтруем по предпочтениям
-    diet_types = preferences.get('diet', [])
-    allergens = preferences.get('allergens', [])
-    excluded = preferences.get('excludedFoods', [])
-    budget_per_meal = preferences.get('budget', 5000) / 21  # Бюджет на одно блюдо
-    
-    # Простая фильтрация (можно улучшить)
+    # Фильтруем по исключённым продуктам и аллергенам
     filtered_meals = []
+    
+    # Маппинг аллергенов на ингредиенты
+    allergen_keywords = {
+        'dairy': ['milk', 'cheese', 'cream', 'butter', 'yogurt'],
+        'eggs': ['egg'],
+        'nuts': ['nut', 'almond', 'peanut', 'walnut', 'cashew'],
+        'gluten': ['flour', 'wheat', 'bread', 'pasta'],
+        'seafood': ['fish', 'shrimp', 'crab', 'lobster', 'salmon'],
+        'citrus': ['lemon', 'lime', 'orange', 'grapefruit']
+    }
+    
     for meal in all_meals:
-        # Проверяем исключённые продукты
         meal_text = f"{meal['name']} {meal['instructions']}".lower()
+        meal_ingredients = ' '.join(meal.get('ingredients', [])).lower()
         
         skip = False
+        
+        # Проверяем исключённые продукты
         for excluded_food in excluded:
-            if excluded_food.lower() in meal_text:
+            if excluded_food.lower() in meal_text or excluded_food.lower() in meal_ingredients:
                 skip = True
                 break
+        
+        # Проверяем аллергены
+        if not skip:
+            for allergen in allergens:
+                allergen_key = allergen.lower().replace('молочные продукты', 'dairy').replace('яйца', 'eggs').replace('орехи', 'nuts').replace('глютен', 'gluten').replace('морепродукты', 'seafood').replace('цитрусовые', 'citrus')
+                keywords = allergen_keywords.get(allergen_key, [])
+                for keyword in keywords:
+                    if keyword in meal_ingredients or keyword in meal_text:
+                        skip = True
+                        break
+                if skip:
+                    break
         
         if not skip:
             filtered_meals.append(meal)
@@ -136,7 +222,11 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
     # Если после фильтрации осталось мало блюд, добавляем ещё
     while len(filtered_meals) < 21:
         extra_meals = fetch_random_meals_from_db(5)
-        filtered_meals.extend(extra_meals)
+        for meal in extra_meals:
+            if meal not in filtered_meals:
+                filtered_meals.append(meal)
+                if len(filtered_meals) >= 21:
+                    break
     
     # Формируем меню на неделю
     days = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']

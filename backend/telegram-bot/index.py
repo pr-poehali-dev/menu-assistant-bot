@@ -78,6 +78,26 @@ def send_message(chat_id: int, text: str, reply_markup: Optional[Dict] = None) -
     response = requests.post(url, json=payload)
     return response.json()
 
+def translate_to_russian(text: str) -> str:
+    """Простой перевод через Google Translate API (бесплатно)"""
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {
+            'client': 'gtx',
+            'sl': 'en',
+            'tl': 'ru',
+            'dt': 't',
+            'q': text
+        }
+        response = requests.get(url, params=params, timeout=5)
+        if response.status_code == 200:
+            result = response.json()
+            if result and len(result) > 0 and len(result[0]) > 0:
+                return result[0][0][0]
+    except Exception as e:
+        print(f"Translation error: {e}")
+    return text
+
 def fetch_meals_by_category(category: str, limit: int = 30) -> list:
     """Получение рецептов по категории из TheMealDB"""
     try:
@@ -100,7 +120,7 @@ def fetch_meals_by_category(category: str, limit: int = 30) -> list:
                     if detail_data.get('meals'):
                         m = detail_data['meals'][0]
                         detailed_meals.append({
-                            'name': m['strMeal'],
+                            'name': translate_to_russian(m['strMeal']),
                             'category': m['strCategory'],
                             'area': m['strArea'],
                             'instructions': m['strInstructions'],
@@ -125,7 +145,7 @@ def fetch_random_meals_from_db(count: int = 21) -> list:
                 if data.get('meals'):
                     meal = data['meals'][0]
                     meals.append({
-                        'name': meal['strMeal'],
+                        'name': translate_to_russian(meal['strMeal']),
                         'category': meal['strCategory'],
                         'area': meal['strArea'],
                         'instructions': meal['strInstructions'],

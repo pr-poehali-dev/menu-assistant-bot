@@ -8,7 +8,8 @@ import psycopg2
 from typing import Dict, Any, Optional
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
+YANDEX_API_KEY = os.environ.get('YANDEX_API_KEY', '')
+YANDEX_FOLDER_ID = os.environ.get('YANDEX_FOLDER_ID', '')
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 def get_db_connection():
@@ -80,9 +81,9 @@ def send_message(chat_id: int, text: str, reply_markup: Optional[Dict] = None) -
     return response.json()
 
 def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
-    """Генерация меню через OpenAI GPT-4"""
-    if not OPENAI_API_KEY:
-        return {"error": "OpenAI API key not configured"}
+    """Генерация меню через Яндекс GPT"""
+    if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:
+        return {"error": "Яндекс API ключи не настроены. Добавьте YANDEX_API_KEY и YANDEX_FOLDER_ID"}
     
     diet_text = ', '.join(preferences.get('diet', ['обычная'])) if preferences.get('diet') else 'обычная'
     allergens_text = ', '.join(preferences.get('allergens', [])) if preferences.get('allergens') else 'нет'
@@ -98,54 +99,74 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
 - Порций: {preferences.get('servings', 2)}
 - Время готовки: до {preferences.get('cookingTime', '60')} минут
 
-Верни JSON в формате:
+Верни ТОЛЬКО JSON без дополнительного текста в формате:
 {{
   "menu": [
     {{
       "day": "Понедельник",
       "meals": {{
-        "breakfast": {{"name": "...", "calories": 400, "cost": 150, "time": 15}},
-        "lunch": {{"name": "...", "calories": 600, "cost": 250, "time": 30}},
-        "dinner": {{"name": "...", "calories": 500, "cost": 200, "time": 25}}
+        "breakfast": {{"name": "Овсяная каша с ягодами", "calories": 400, "cost": 150, "time": 15}},
+        "lunch": {{"name": "Куриный суп с лапшой", "calories": 600, "cost": 250, "time": 30}},
+        "dinner": {{"name": "Запеченная рыба с овощами", "calories": 500, "cost": 200, "time": 25}}
       }}
-    }}
+    }},
+    (еще 6 дней: Вторник, Среда, Четверг, Пятница, Суббота, Воскресенье)
   ]
-}}
-
-Только JSON, без комментариев."""
+}}"""
 
     try:
-        # Пробуем сначала gpt-4o-mini (дешевле и быстрее)
         response = requests.post(
-            'https://api.openai.com/v1/chat/completions',
+            'https://llm.api.cloud.yandex.net/foundationModels/v1/completion',
             headers={
-                'Authorization': f'Bearer {OPENAI_API_KEY}',
+                'Authorization': f'Api-Key {YANDEX_API_KEY}',
                 'Content-Type': 'application/json'
             },
             json={
-                'model': 'gpt-4o-mini',
-                'messages': [{'role': 'user', 'content': prompt}],
-                'temperature': 0.7
+                'modelUri': f'gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite',
+                'completionOptions': {
+                    'stream': False,
+                    'temperature': 0.6,
+                    'maxTokens': 3000
+                },
+                'messages': [
+                    {
+                        'role': 'system',
+                        'text': 'Ты — профессиональный диетолог. Создавай меню в формате JSON без дополнительных объяснений.'
+                    },
+                    {
+                        'role': 'user',
+                        'text': prompt
+                    }
+                ]
             },
             timeout=60
         )
         
         if response.status_code != 200:
             error_detail = response.text
-            print(f"OpenAI API error: {response.status_code}, {error_detail}")
-            return {"error": f"Ошибка OpenAI API (код {response.status_code}). Проверьте ключ и баланс на platform.openai.com"}
+            print(f"Yandex GPT API error: {response.status_code}, {error_detail}")
+            return {"error": f"Ошибка Яндекс GPT API (код {response.status_code}). Проверьте ключи в console.yandex.cloud"}
         
         result = response.json()
-        content = result['choices'][0]['message']['content']
+        content = result['result']['alternatives'][0]['message']['text']
         
         # Извлечение JSON из ответа
+        content = content.strip()
         if '```json' in content:
             content = content.split('```json')[1].split('```')[0].strip()
         elif '```' in content:
             content = content.split('```')[1].split('```')[0].strip()
         
+        # Удаляем возможный текст до {
+        if '{' in content:
+            content = content[content.index('{'):]
+        # Удаляем возможный текст после }
+        if '}' in content:
+            content = content[:content.rindex('}')+1]
+        
         return json.loads(content)
     except Exception as e:
+        print(f"Error generating menu: {str(e)}")
         return {"error": f"Ошибка генерации меню: {str(e)}"}
 
 def format_menu_message(menu_data: Dict) -> str:

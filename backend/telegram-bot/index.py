@@ -8,8 +8,7 @@ import psycopg2
 from typing import Dict, Any, Optional
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-YANDEX_API_KEY = os.environ.get('YANDEX_API_KEY', '')
-YANDEX_FOLDER_ID = os.environ.get('YANDEX_FOLDER_ID', '')
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 def get_db_connection():
@@ -81,9 +80,9 @@ def send_message(chat_id: int, text: str, reply_markup: Optional[Dict] = None) -
     return response.json()
 
 def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
-    """Генерация меню через Яндекс GPT"""
-    if not YANDEX_API_KEY or not YANDEX_FOLDER_ID:
-        return {"error": "Яндекс API ключи не настроены. Добавьте YANDEX_API_KEY и YANDEX_FOLDER_ID"}
+    """Генерация меню через Google Gemini (бесплатно!)"""
+    if not GEMINI_API_KEY:
+        return {"error": "Gemini API ключ не настроен. Добавьте GEMINI_API_KEY (получить на ai.google.dev)"}
     
     diet_text = ', '.join(preferences.get('diet', ['обычная'])) if preferences.get('diet') else 'обычная'
     allergens_text = ', '.join(preferences.get('allergens', [])) if preferences.get('allergens') else 'нет'
@@ -99,7 +98,7 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
 - Порций: {preferences.get('servings', 2)}
 - Время готовки: до {preferences.get('cookingTime', '60')} минут
 
-Верни ТОЛЬКО JSON без дополнительного текста в формате:
+Верни ТОЛЬКО валидный JSON без markdown, без объяснений, без текста до и после JSON. Формат:
 {{
   "menu": [
     {{
@@ -110,45 +109,44 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
         "dinner": {{"name": "Запеченная рыба с овощами", "calories": 500, "cost": 200, "time": 25}}
       }}
     }},
-    (еще 6 дней: Вторник, Среда, Четверг, Пятница, Суббота, Воскресенье)
+    {{
+      "day": "Вторник",
+      "meals": {{
+        "breakfast": {{"name": "...", "calories": 400, "cost": 150, "time": 15}},
+        "lunch": {{"name": "...", "calories": 600, "cost": 250, "time": 30}},
+        "dinner": {{"name": "...", "calories": 500, "cost": 200, "time": 25}}
+      }}
+    }}
   ]
-}}"""
+}}
+
+Создай меню для всех 7 дней: Понедельник, Вторник, Среда, Четверг, Пятница, Суббота, Воскресенье."""
 
     try:
         response = requests.post(
-            'https://llm.api.cloud.yandex.net/foundationModels/v1/completion',
-            headers={
-                'Authorization': f'Api-Key {YANDEX_API_KEY}',
-                'Content-Type': 'application/json'
-            },
+            f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}',
+            headers={'Content-Type': 'application/json'},
             json={
-                'modelUri': f'gpt://{YANDEX_FOLDER_ID}/yandexgpt-lite',
-                'completionOptions': {
-                    'stream': False,
-                    'temperature': 0.6,
-                    'maxTokens': 3000
-                },
-                'messages': [
-                    {
-                        'role': 'system',
-                        'text': 'Ты — профессиональный диетолог. Создавай меню в формате JSON без дополнительных объяснений.'
-                    },
-                    {
-                        'role': 'user',
+                'contents': [{
+                    'parts': [{
                         'text': prompt
-                    }
-                ]
+                    }]
+                }],
+                'generationConfig': {
+                    'temperature': 0.7,
+                    'maxOutputTokens': 8000
+                }
             },
             timeout=60
         )
         
         if response.status_code != 200:
             error_detail = response.text
-            print(f"Yandex GPT API error: {response.status_code}, {error_detail}")
-            return {"error": f"Ошибка Яндекс GPT API (код {response.status_code}). Проверьте ключи в console.yandex.cloud"}
+            print(f"Gemini API error: {response.status_code}, {error_detail}")
+            return {"error": f"Ошибка Gemini API (код {response.status_code}). Проверьте ключ на ai.google.dev"}
         
         result = response.json()
-        content = result['result']['alternatives'][0]['message']['text']
+        content = result['candidates'][0]['content']['parts'][0]['text']
         
         # Извлечение JSON из ответа
         content = content.strip()
@@ -160,11 +158,17 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
         # Удаляем возможный текст до {
         if '{' in content:
             content = content[content.index('{'):]
-        # Удаляем возможный текст после }
+        # Удаляем возможный текст после последней }
         if '}' in content:
             content = content[:content.rindex('}')+1]
         
-        return json.loads(content)
+        menu_data = json.loads(content)
+        
+        # Проверяем что получили 7 дней
+        if len(menu_data.get('menu', [])) < 7:
+            print(f"Warning: Got only {len(menu_data.get('menu', []))} days")
+        
+        return menu_data
     except Exception as e:
         print(f"Error generating menu: {str(e)}")
         return {"error": f"Ошибка генерации меню: {str(e)}"}

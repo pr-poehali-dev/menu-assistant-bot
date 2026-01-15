@@ -8,7 +8,6 @@ import psycopg2
 from typing import Dict, Any, Optional
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-GIGACHAT_API_KEY = os.environ.get('GIGACHAT_API_KEY', '')
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 def get_db_connection():
@@ -79,115 +78,105 @@ def send_message(chat_id: int, text: str, reply_markup: Optional[Dict] = None) -
     response = requests.post(url, json=payload)
     return response.json()
 
-def get_gigachat_token() -> Optional[str]:
-    """Получение access token для GigaChat"""
-    if not GIGACHAT_API_KEY:
-        return None
-    
+def fetch_random_meals_from_db(count: int = 21) -> list:
+    """Получение случайных рецептов из TheMealDB (полностью бесплатно!)"""
+    meals = []
     try:
-        response = requests.post(
-            'https://ngw.devices.sberbank.ru:9443/api/v2/oauth',
-            headers={
-                'Authorization': f'Basic {GIGACHAT_API_KEY}',
-                'RqUID': '6f0b1291-c7f3-43c6-bb2e-9f3efb2dc98e',
-                'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            data={'scope': 'GIGACHAT_API_PERS'},
-            verify=False,
-            timeout=10
-        )
-        
-        if response.status_code == 200:
-            return response.json()['access_token']
-        return None
+        # TheMealDB предоставляет бесплатный API без ключа
+        for _ in range(count):
+            response = requests.get(
+                'https://www.themealdb.com/api/json/v1/1/random.php',
+                timeout=10
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('meals'):
+                    meal = data['meals'][0]
+                    meals.append({
+                        'name': meal['strMeal'],
+                        'category': meal['strCategory'],
+                        'area': meal['strArea'],
+                        'instructions': meal['strInstructions']
+                    })
     except Exception as e:
-        print(f"Error getting GigaChat token: {e}")
-        return None
+        print(f"Error fetching meals: {e}")
+    
+    return meals
 
 def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
-    """Генерация меню через GigaChat от Сбера (бесплатно для РФ!)"""
-    if not GIGACHAT_API_KEY:
-        return {"error": "GigaChat API ключ не настроен. Добавьте GIGACHAT_API_KEY (получить на developers.sber.ru/gigachat)"}
+    """Генерация меню из базы TheMealDB (полностью бесплатно, без API ключа)"""
     
-    access_token = get_gigachat_token()
-    if not access_token:
-        return {"error": "Не удалось получить токен GigaChat. Проверьте ключ"}
+    # Получаем 21 случайных блюд (7 дней × 3 приёма пищи)
+    all_meals = fetch_random_meals_from_db(21)
     
-    diet_text = ', '.join(preferences.get('diet', ['обычная'])) if preferences.get('diet') else 'обычная'
-    allergens_text = ', '.join(preferences.get('allergens', [])) if preferences.get('allergens') else 'нет'
-    excluded_text = ', '.join(preferences.get('excludedFoods', [])) if preferences.get('excludedFoods') else 'нет'
+    if len(all_meals) < 21:
+        return {"error": "Не удалось загрузить достаточно рецептов из базы"}
     
-    prompt = f"""Создай недельное меню на 7 дней с завтраком, обедом и ужином.
-
-Требования:
-- Бюджет: {preferences.get('budget', 5000)} руб/неделя
-- Диета: {diet_text}
-- Исключить аллергены: {allergens_text}
-- Не использовать продукты: {excluded_text}
-- Порций: {preferences.get('servings', 2)}
-- Время готовки: до {preferences.get('cookingTime', '60')} минут
-
-Верни ТОЛЬКО валидный JSON, без текста до и после. Формат:
-{{
-  "menu": [
-    {{
-      "day": "Понедельник",
-      "meals": {{
-        "breakfast": {{"name": "Овсяная каша с ягодами", "calories": 400, "cost": 150, "time": 15}},
-        "lunch": {{"name": "Куриный суп с лапшой", "calories": 600, "cost": 250, "time": 30}},
-        "dinner": {{"name": "Запеченная рыба с овощами", "calories": 500, "cost": 200, "time": 25}}
-      }}
-    }}
-  ]
-}}
-
-Создай все 7 дней: Понедельник, Вторник, Среда, Четверг, Пятница, Суббота, Воскресенье."""
-
-    try:
-        response = requests.post(
-            'https://gigachat.devices.sberbank.ru/api/v1/chat/completions',
-            headers={
-                'Authorization': f'Bearer {access_token}',
-                'Content-Type': 'application/json'
-            },
-            json={
-                'model': 'GigaChat',
-                'messages': [
-                    {'role': 'system', 'content': 'Ты — профессиональный диетолог. Отвечай только в формате JSON без дополнительного текста.'},
-                    {'role': 'user', 'content': prompt}
-                ],
-                'temperature': 0.7,
-                'max_tokens': 3000
-            },
-            verify=False,
-            timeout=60
-        )
+    # Фильтруем по предпочтениям
+    diet_types = preferences.get('diet', [])
+    allergens = preferences.get('allergens', [])
+    excluded = preferences.get('excludedFoods', [])
+    budget_per_meal = preferences.get('budget', 5000) / 21  # Бюджет на одно блюдо
+    
+    # Простая фильтрация (можно улучшить)
+    filtered_meals = []
+    for meal in all_meals:
+        # Проверяем исключённые продукты
+        meal_text = f"{meal['name']} {meal['instructions']}".lower()
         
-        if response.status_code != 200:
-            error_detail = response.text
-            print(f"GigaChat API error: {response.status_code}, {error_detail}")
-            return {"error": f"Ошибка GigaChat API (код {response.status_code})"}
+        skip = False
+        for excluded_food in excluded:
+            if excluded_food.lower() in meal_text:
+                skip = True
+                break
         
-        result = response.json()
-        content = result['choices'][0]['message']['content']
+        if not skip:
+            filtered_meals.append(meal)
+    
+    # Если после фильтрации осталось мало блюд, добавляем ещё
+    while len(filtered_meals) < 21:
+        extra_meals = fetch_random_meals_from_db(5)
+        filtered_meals.extend(extra_meals)
+    
+    # Формируем меню на неделю
+    days = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье']
+    menu = []
+    
+    meal_index = 0
+    for day in days:
+        if meal_index + 2 >= len(filtered_meals):
+            break
+            
+        breakfast = filtered_meals[meal_index]
+        lunch = filtered_meals[meal_index + 1]
+        dinner = filtered_meals[meal_index + 2]
+        meal_index += 3
         
-        # Извлечение JSON из ответа
-        content = content.strip()
-        if '```json' in content:
-            content = content.split('```json')[1].split('```')[0].strip()
-        elif '```' in content:
-            content = content.split('```')[1].split('```')[0].strip()
-        
-        # Удаляем текст до { и после }
-        if '{' in content:
-            content = content[content.index('{'):]
-        if '}' in content:
-            content = content[:content.rindex('}')+1]
-        
-        return json.loads(content)
-    except Exception as e:
-        print(f"Error generating menu: {str(e)}")
-        return {"error": f"Ошибка генерации меню: {str(e)}"}
+        menu.append({
+            'day': day,
+            'meals': {
+                'breakfast': {
+                    'name': breakfast['name'],
+                    'calories': 400,  # Примерные значения
+                    'cost': int(budget_per_meal * 0.8),
+                    'time': 20
+                },
+                'lunch': {
+                    'name': lunch['name'],
+                    'calories': 650,
+                    'cost': int(budget_per_meal * 1.2),
+                    'time': 35
+                },
+                'dinner': {
+                    'name': dinner['name'],
+                    'calories': 550,
+                    'cost': int(budget_per_meal),
+                    'time': 30
+                }
+            }
+        })
+    
+    return {'menu': menu}
 
 def format_menu_message(menu_data: Dict) -> str:
     """Форматирование меню для отправки в Telegram"""

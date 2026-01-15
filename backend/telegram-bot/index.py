@@ -115,6 +115,7 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
 Только JSON, без комментариев."""
 
     try:
+        # Пробуем сначала gpt-4o-mini (дешевле и быстрее)
         response = requests.post(
             'https://api.openai.com/v1/chat/completions',
             headers={
@@ -122,7 +123,7 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
                 'Content-Type': 'application/json'
             },
             json={
-                'model': 'gpt-4',
+                'model': 'gpt-4o-mini',
                 'messages': [{'role': 'user', 'content': prompt}],
                 'temperature': 0.7
             },
@@ -130,7 +131,9 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
         )
         
         if response.status_code != 200:
-            return {"error": f"OpenAI API error: {response.status_code}"}
+            error_detail = response.text
+            print(f"OpenAI API error: {response.status_code}, {error_detail}")
+            return {"error": f"Ошибка OpenAI API (код {response.status_code}). Проверьте ключ и баланс на platform.openai.com"}
         
         result = response.json()
         content = result['choices'][0]['message']['content']

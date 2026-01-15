@@ -8,7 +8,7 @@ import psycopg2
 from typing import Dict, Any, Optional
 
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+GIGACHAT_API_KEY = os.environ.get('GIGACHAT_API_KEY', '')
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
 
 def get_db_connection():
@@ -79,10 +79,39 @@ def send_message(chat_id: int, text: str, reply_markup: Optional[Dict] = None) -
     response = requests.post(url, json=payload)
     return response.json()
 
+def get_gigachat_token() -> Optional[str]:
+    """Получение access token для GigaChat"""
+    if not GIGACHAT_API_KEY:
+        return None
+    
+    try:
+        response = requests.post(
+            'https://ngw.devices.sberbank.ru:9443/api/v2/oauth',
+            headers={
+                'Authorization': f'Basic {GIGACHAT_API_KEY}',
+                'RqUID': '6f0b1291-c7f3-43c6-bb2e-9f3efb2dc98e',
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            data={'scope': 'GIGACHAT_API_PERS'},
+            verify=False,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            return response.json()['access_token']
+        return None
+    except Exception as e:
+        print(f"Error getting GigaChat token: {e}")
+        return None
+
 def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
-    """Генерация меню через Google Gemini (бесплатно!)"""
-    if not GEMINI_API_KEY:
-        return {"error": "Gemini API ключ не настроен. Добавьте GEMINI_API_KEY (получить на ai.google.dev)"}
+    """Генерация меню через GigaChat от Сбера (бесплатно для РФ!)"""
+    if not GIGACHAT_API_KEY:
+        return {"error": "GigaChat API ключ не настроен. Добавьте GIGACHAT_API_KEY (получить на developers.sber.ru/gigachat)"}
+    
+    access_token = get_gigachat_token()
+    if not access_token:
+        return {"error": "Не удалось получить токен GigaChat. Проверьте ключ"}
     
     diet_text = ', '.join(preferences.get('diet', ['обычная'])) if preferences.get('diet') else 'обычная'
     allergens_text = ', '.join(preferences.get('allergens', [])) if preferences.get('allergens') else 'нет'
@@ -98,7 +127,7 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
 - Порций: {preferences.get('servings', 2)}
 - Время готовки: до {preferences.get('cookingTime', '60')} минут
 
-Верни ТОЛЬКО валидный JSON без markdown, без объяснений, без текста до и после JSON. Формат:
+Верни ТОЛЬКО валидный JSON, без текста до и после. Формат:
 {{
   "menu": [
     {{
@@ -108,45 +137,39 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
         "lunch": {{"name": "Куриный суп с лапшой", "calories": 600, "cost": 250, "time": 30}},
         "dinner": {{"name": "Запеченная рыба с овощами", "calories": 500, "cost": 200, "time": 25}}
       }}
-    }},
-    {{
-      "day": "Вторник",
-      "meals": {{
-        "breakfast": {{"name": "...", "calories": 400, "cost": 150, "time": 15}},
-        "lunch": {{"name": "...", "calories": 600, "cost": 250, "time": 30}},
-        "dinner": {{"name": "...", "calories": 500, "cost": 200, "time": 25}}
-      }}
     }}
   ]
 }}
 
-Создай меню для всех 7 дней: Понедельник, Вторник, Среда, Четверг, Пятница, Суббота, Воскресенье."""
+Создай все 7 дней: Понедельник, Вторник, Среда, Четверг, Пятница, Суббота, Воскресенье."""
 
     try:
         response = requests.post(
-            f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={GEMINI_API_KEY}',
-            headers={'Content-Type': 'application/json'},
-            json={
-                'contents': [{
-                    'parts': [{
-                        'text': prompt
-                    }]
-                }],
-                'generationConfig': {
-                    'temperature': 0.7,
-                    'maxOutputTokens': 8000
-                }
+            'https://gigachat.devices.sberbank.ru/api/v1/chat/completions',
+            headers={
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json'
             },
+            json={
+                'model': 'GigaChat',
+                'messages': [
+                    {'role': 'system', 'content': 'Ты — профессиональный диетолог. Отвечай только в формате JSON без дополнительного текста.'},
+                    {'role': 'user', 'content': prompt}
+                ],
+                'temperature': 0.7,
+                'max_tokens': 3000
+            },
+            verify=False,
             timeout=60
         )
         
         if response.status_code != 200:
             error_detail = response.text
-            print(f"Gemini API error: {response.status_code}, {error_detail}")
-            return {"error": f"Ошибка Gemini API (код {response.status_code}). Проверьте ключ на ai.google.dev"}
+            print(f"GigaChat API error: {response.status_code}, {error_detail}")
+            return {"error": f"Ошибка GigaChat API (код {response.status_code})"}
         
         result = response.json()
-        content = result['candidates'][0]['content']['parts'][0]['text']
+        content = result['choices'][0]['message']['content']
         
         # Извлечение JSON из ответа
         content = content.strip()
@@ -155,20 +178,13 @@ def generate_menu_with_ai(preferences: Dict[str, Any]) -> Dict[str, Any]:
         elif '```' in content:
             content = content.split('```')[1].split('```')[0].strip()
         
-        # Удаляем возможный текст до {
+        # Удаляем текст до { и после }
         if '{' in content:
             content = content[content.index('{'):]
-        # Удаляем возможный текст после последней }
         if '}' in content:
             content = content[:content.rindex('}')+1]
         
-        menu_data = json.loads(content)
-        
-        # Проверяем что получили 7 дней
-        if len(menu_data.get('menu', [])) < 7:
-            print(f"Warning: Got only {len(menu_data.get('menu', []))} days")
-        
-        return menu_data
+        return json.loads(content)
     except Exception as e:
         print(f"Error generating menu: {str(e)}")
         return {"error": f"Ошибка генерации меню: {str(e)}"}

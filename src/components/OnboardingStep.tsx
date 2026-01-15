@@ -181,12 +181,12 @@ const OnboardingStep = ({ onComplete }: OnboardingStepProps) => {
                   excludedFoods.map((food) => (
                     <div
                       key={food}
-                      className="flex items-center gap-2 py-1.5 px-3 border-2 border-red-300 bg-transparent rounded-md text-sm font-medium text-foreground hover:border-red-400 transition-colors"
+                      className="flex items-center gap-1.5 py-1 px-2.5 border border-border bg-transparent rounded-md text-sm text-foreground hover:bg-muted/50 transition-colors"
                     >
                       {food}
                       <button 
                         onClick={() => handleRemoveExcludedFood(food)}
-                        className="hover:text-red-600 transition-colors"
+                        className="hover:text-destructive transition-colors"
                       >
                         <Icon name="X" size={14} />
                       </button>

@@ -179,12 +179,18 @@ const OnboardingStep = ({ onComplete }: OnboardingStepProps) => {
                   <p className="text-sm text-muted-foreground">Нет исключённых продуктов</p>
                 ) : (
                   excludedFoods.map((food) => (
-                    <Badge key={food} variant="secondary" className="gap-1 py-1.5 px-3">
+                    <div
+                      key={food}
+                      className="flex items-center gap-2 py-1.5 px-3 border-2 border-red-300 bg-transparent rounded-md text-sm font-medium text-foreground hover:border-red-400 transition-colors"
+                    >
                       {food}
-                      <button onClick={() => handleRemoveExcludedFood(food)}>
+                      <button 
+                        onClick={() => handleRemoveExcludedFood(food)}
+                        className="hover:text-red-600 transition-colors"
+                      >
                         <Icon name="X" size={14} />
                       </button>
-                    </Badge>
+                    </div>
                   ))
                 )}
               </div>
